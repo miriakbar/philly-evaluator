@@ -26,13 +26,16 @@ async function fetchPhillyData(query) {
     const response = await fetch(apiUrl);
     
     if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
         throw new Error(`API request failed: ${response.status} ${response.statusText}`);
     }
     
     const data = await response.json();
     
     if (data.error) {
-        throw new Error(`API error: ${data.error[0]}`);
+        console.error('Carto API Error:', data.error);
+        throw new Error(`API error: ${Array.isArray(data.error) ? data.error[0] : data.error}`);
     }
     
     return data.rows || [];
@@ -90,6 +93,8 @@ app.get('/api/geocode', async (req, res) => {
 });
 
 // Crime data endpoint
+// Table: incidents_part1_part2
+// Lat/Lng must be extracted using ST_Y(the_geom) and ST_X(the_geom)
 app.post('/api/crime-data', async (req, res) => {
     try {
         const { lat, lon, radius, startDate, endDate } = req.body;
@@ -106,15 +111,17 @@ app.post('/api/crime-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
+        // FIXED: Use ST_Y(the_geom) and ST_X(the_geom) to extract coordinates
+        // and filter using those computed values
         const query = `
-            SELECT text_general_code, dispatch_date_time, lat, lng 
+            SELECT text_general_code, dispatch_date_time, 
+                   ST_Y(the_geom) AS lat, ST_X(the_geom) AS lng 
             FROM incidents_part1_part2 
             WHERE dispatch_date_time >= '${startDate}' 
             AND dispatch_date_time <= '${endDate}'
-            AND lat IS NOT NULL 
-            AND lng IS NOT NULL
-            AND lat BETWEEN ${lat - radius} AND ${lat + radius}
-            AND lng BETWEEN ${lon - radius} AND ${lon + radius}
+            AND the_geom IS NOT NULL
+            AND ST_Y(the_geom) BETWEEN ${lat - radius} AND ${lat + radius}
+            AND ST_X(the_geom) BETWEEN ${lon - radius} AND ${lon + radius}
             ORDER BY dispatch_date_time DESC
             LIMIT 200
         `;
@@ -132,6 +139,8 @@ app.post('/api/crime-data', async (req, res) => {
 });
 
 // 311 service requests endpoint
+// Table: public_cases_fc
+// Lat/Lng must be extracted using ST_Y(the_geom) and ST_X(the_geom)
 app.post('/api/311-data', async (req, res) => {
     try {
         const { lat, lon, radius, startDate, endDate } = req.body;
@@ -148,15 +157,16 @@ app.post('/api/311-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
+        // FIXED: Use ST_Y(the_geom) and ST_X(the_geom) to extract coordinates
         const query = `
-            SELECT service_name, requested_datetime, status, lat, lon 
+            SELECT service_name, requested_datetime, status, 
+                   ST_Y(the_geom) AS lat, ST_X(the_geom) AS lon 
             FROM public_cases_fc 
             WHERE requested_datetime >= '${startDate}' 
             AND requested_datetime <= '${endDate}'
-            AND lat IS NOT NULL 
-            AND lon IS NOT NULL
-            AND lat BETWEEN ${lat - radius} AND ${lat + radius}
-            AND lon BETWEEN ${lon - radius} AND ${lon + radius}
+            AND the_geom IS NOT NULL
+            AND ST_Y(the_geom) BETWEEN ${lat - radius} AND ${lat + radius}
+            AND ST_X(the_geom) BETWEEN ${lon - radius} AND ${lon + radius}
             ORDER BY requested_datetime DESC
             LIMIT 200
         `;
@@ -174,6 +184,10 @@ app.post('/api/311-data', async (req, res) => {
 });
 
 // Violations endpoint
+// FIXED: Table name is 'violations' (not 'li_violations')
+// FIXED: Date column is 'violationdate' (not 'casedate')
+// FIXED: Status column is 'violationstatus' 
+// FIXED: Use ST_Y(the_geom) and ST_X(the_geom) to extract coordinates
 app.post('/api/violations-data', async (req, res) => {
     try {
         const { lat, lon, radius } = req.body;
@@ -190,14 +204,22 @@ app.post('/api/violations-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
+        // FIXED: Correct table name and column names
+        // Table: violations
+        // Date: violationdate
+        // Description: violationcodetitle or violationdescription
+        // Status: violationstatus
         const query = `
-            SELECT violationdescription, casedate, casestatus, lat, lng
-            FROM li_violations
-            WHERE lat IS NOT NULL 
-            AND lng IS NOT NULL
-            AND lat BETWEEN ${lat - radius} AND ${lat + radius}
-            AND lng BETWEEN ${lon - radius} AND ${lon + radius}
-            ORDER BY casedate DESC
+            SELECT violationcodetitle AS violationdescription, 
+                   violationdate AS casedate, 
+                   violationstatus AS casestatus,
+                   ST_Y(the_geom) AS lat, ST_X(the_geom) AS lng
+            FROM violations
+            WHERE the_geom IS NOT NULL
+            AND violationdate >= '2024-01-01'
+            AND ST_Y(the_geom) BETWEEN ${lat - radius} AND ${lat + radius}
+            AND ST_X(the_geom) BETWEEN ${lon - radius} AND ${lon + radius}
+            ORDER BY violationdate DESC
             LIMIT 100
         `;
         
