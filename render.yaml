@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: philly-evaluator
+    name: philly-nest
     env: node
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
-        value: 18.0.0
+        value: 18

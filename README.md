@@ -1,277 +1,242 @@
-# 🏘️ Philadelphia Area Evaluator
+# 🏠 Philly Nest
 
-**Live Demo:** [Coming soon after you deploy!]
+**Neighborhood Intelligence for Philadelphia**
 
-A web application that helps you evaluate residential areas in Philadelphia using real-time public data. Perfect for apartment hunting, neighborhood research, or just exploring the city!
+A modern web application that helps you evaluate any Philadelphia neighborhood using real-time public data. Perfect for apartment hunters, home buyers, or anyone exploring where to live in Philly.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-green.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Node](https://img.shields.io/badge/node-≥18-brightgreen.svg)
 
 ## ✨ Features
 
-- 🗺️ **Interactive Map** - Visualize multiple locations with color-coded safety scores
-- 🚨 **Crime Data** - Real-time crime statistics from Philadelphia Police Department
-- 📞 **311 Complaints** - Service requests including noise complaints and maintenance issues
-- 🏗️ **Property Violations** - Building code violations and inspection data
-- 📊 **Smart Scoring** - AI-powered 0-100 safety score for each location
-- 🔍 **Location Search** - Search by address or landmark
-- 📱 **Mobile Friendly** - Works on desktop, tablet, and mobile
-- ⚡ **Fast** - Cached data for instant results
+### 🎯 Comprehensive Scoring
+- **Overall Livability Score** (0-100) combining multiple factors
+- **Safety Score** - Crime incident analysis
+- **Community Score** - 311 service request patterns  
+- **Property Score** - Building violations and maintenance
+- **Green Space Score** - Parks and recreation access
 
-## 🎯 Quick Start
+### 🗺️ Interactive Map
+- Dark-themed CartoDB basemap
+- Color-coded markers by score
+- Click markers for quick stats
+- Slide-out detail panel
+
+### 📊 Deep Analysis
+- Category breakdowns with visual bars
+- Recent incident timeline
+- Community issue breakdown (noise, dumping, maintenance)
+- Data source transparency
+
+### 💾 Smart Caching
+- 1-hour cache for faster repeat queries
+- Efficient API usage
+
+## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+ ([Download here](https://nodejs.org/))
-- Git
+- Node.js 18+ ([Download](https://nodejs.org/))
 
 ### Installation
 
-1. **Clone the repository**
 ```bash
-git clone https://github.com/YOUR_USERNAME/philly-evaluator.git
-cd philly-evaluator
-```
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/philly-nest.git
+cd philly-nest
 
-2. **Install backend dependencies**
-```bash
-cd backend
+# Install dependencies
 npm install
-```
 
-3. **Start the server**
-```bash
+# Start the server
 npm start
-```
 
-4. **Open your browser**
+# Open in browser
+open http://localhost:3000
 ```
-http://localhost:3000
-```
-
-That's it! 🎉
 
 ## 📁 Project Structure
 
 ```
-philly-evaluator-app/
-├── backend/
-│   ├── server.js          # Express API server
-│   └── package.json       # Backend dependencies
-├── frontend/
-│   ├── index.html         # Main HTML file
-│   └── app.js             # Frontend JavaScript
-├── docs/
-│   └── DEPLOYMENT.md      # Deployment guide
-└── README.md              # This file
+philly-nest/
+├── server.js              # Express API server
+├── package.json           # Dependencies
+├── render.yaml            # Render deployment config
+└── frontend/
+    ├── index.html         # Main UI
+    └── app.js             # Frontend logic
 ```
 
 ## 🔧 How It Works
 
-### Data Flow
+### Data Pipeline
 
 ```
 User enters address
-     ↓
-Backend geocodes address (OpenStreetMap)
-     ↓
-Backend fetches data from Philadelphia APIs:
-  ├── Crime incidents (phl.carto.com)
-  ├── 311 service requests (phl.carto.com)
-  └── Property violations (phl.carto.com)
-     ↓
-Backend calculates safety score (0-100)
-     ↓
-Frontend displays on map + detailed view
+        ↓
+Geocode via OpenStreetMap
+        ↓
+Parallel API calls to Philadelphia Open Data:
+  ├── Crime incidents (past 12 months)
+  ├── 311 service requests (past 12 months)
+  ├── Property violations (recent)
+  └── Parks & recreation facilities
+        ↓
+Analysis engine scores each category
+        ↓
+Weighted average → Overall score
+        ↓
+Display on map + detail panel
 ```
 
 ### Scoring Algorithm
 
-```javascript
-Base Score: 100 points
+| Category | Weight | What It Measures |
+|----------|--------|------------------|
+| Safety | 35% | Crime volume, violent vs property crimes |
+| Community | 25% | 311 complaints, noise issues, cleanliness |
+| Property | 20% | Building violations, open vs closed cases |
+| Green Space | 20% | Nearby parks, recreation facilities |
 
-Deductions:
-- Each crime: -0.15 points
-- Each violent crime: -0.5 points (additional)
-- Each 311 request: -0.1 points
-- Each noise complaint: -0.3 points (additional)
-- Each violation: -0.15 points
-- Each open violation: -0.3 points (additional)
+### Score Ranges
 
-Final Score: 0-100 (capped)
-```
-
-### Score Interpretation
-- **85-100** 🟢 Excellent - Very safe area
-- **70-84** 🔵 Good - Above average safety
-- **50-69** 🟡 Fair - Average for urban areas
-- **0-49** 🔴 Poor - Exercise caution
-
-## 📊 Data Sources
-
-All data is public and updated regularly:
-
-| Data Type | Source | Update Frequency |
-|-----------|--------|------------------|
-| Crime Incidents | Philadelphia Police Dept | Daily |
-| 311 Requests | Philly311 | Real-time |
-| Property Violations | L&I Department | Weekly |
-| Geocoding | OpenStreetMap | Real-time |
-
-**Data Coverage:**
-- Crime: 2006 - Present
-- 311: 2014 - Present
-- Violations: 2010 - Present
+| Score | Label | Color | Meaning |
+|-------|-------|-------|---------|
+| 85-100 | Excellent | 🟢 Green | Strong across all metrics |
+| 70-84 | Good | 🔵 Blue | Solid with minor concerns |
+| 50-69 | Fair | 🟡 Amber | Typical urban challenges |
+| 0-49 | Needs Work | 🔴 Red | Notable concerns |
 
 ## 🌐 API Endpoints
 
 ### `GET /api/health`
-Health check endpoint
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-02-01T18:00:00.000Z",
-  "cache_stats": {...}
-}
-```
+Health check and cache stats
 
 ### `GET /api/geocode?address=ADDRESS`
 Convert address to coordinates
-```json
-{
-  "lat": 39.9526,
-  "lon": -75.1652,
-  "display_name": "1500 Market St, Philadelphia..."
-}
-```
 
 ### `POST /api/crime-data`
-Fetch crime data for location
 ```json
 {
   "lat": 39.9526,
   "lon": -75.1652,
   "radius": 0.008,
-  "startDate": "2025-01-01",
-  "endDate": "2026-01-01"
+  "startDate": "2024-02-01",
+  "endDate": "2025-02-01"
 }
 ```
 
-## 🚀 Deployment
+### `POST /api/311-data`
+Same parameters as crime data
 
-See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed instructions.
-
-**Quick Deploy Options:**
-- [Render](https://render.com) (Recommended - Free)
-- [Railway](https://railway.app) (Free)
-- [Vercel](https://vercel.com) (Free)
-- [Heroku](https://heroku.com) ($7/month)
-
-**Deploy in 2 minutes:**
-```bash
-# Using Render CLI
-npm install -g render
-render deploy
+### `POST /api/violations-data`
+```json
+{
+  "lat": 39.9526,
+  "lon": -75.1652,
+  "radius": 0.008
+}
 ```
 
-## 🧪 Testing
+### `POST /api/parks-data`
+Same parameters as violations
+
+## 🚀 Deployment
+
+### Deploy to Render (Recommended - Free)
+
+1. Push code to GitHub
+2. Go to [render.com](https://render.com)
+3. New → Web Service → Connect GitHub repo
+4. It auto-detects `render.yaml` config
+5. Deploy!
+
+### Deploy to Railway
 
 ```bash
-# Test backend API
+railway login
+railway init
+railway up
+```
+
+### Deploy to Heroku
+
+```bash
+heroku create philly-nest-yourname
+git push heroku main
+```
+
+## 📊 Data Sources
+
+All data from [OpenDataPhilly](https://opendataphilly.org/):
+
+| Dataset | Table | Update Frequency |
+|---------|-------|------------------|
+| Crime Incidents | `incidents_part1_part2` | Daily |
+| 311 Requests | `public_cases_fc` | Real-time |
+| Violations | `violations` | Weekly |
+| Parks | `ppr_facilities` | As needed |
+
+## 🎨 Design Principles
+
+- **Dark theme** - Easy on eyes, modern feel
+- **Minimal UI** - Focus on data, not chrome
+- **Typography** - Instrument Serif + DM Sans
+- **Subtle textures** - Noise overlay for depth
+- **Intentional color** - Scores drive the palette
+
+## 🛠️ Development
+
+```bash
+# Run with auto-reload
+npm run dev
+
+# Test API
 curl http://localhost:3000/api/health
 
 # Test geocoding
-curl "http://localhost:3000/api/geocode?address=1500+Market+St"
-
-# Test crime data (requires POST)
-curl -X POST http://localhost:3000/api/crime-data \
-  -H "Content-Type: application/json" \
-  -d '{"lat":39.9526,"lon":-75.1652,"radius":0.008,"startDate":"2025-01-01","endDate":"2026-01-01"}'
+curl "http://localhost:3000/api/geocode?address=City%20Hall"
 ```
 
-## 🛠️ Configuration
+## 🐛 Troubleshooting
 
-### Environment Variables
+### "Address not found"
+- Make sure it's a Philadelphia address
+- Try adding "Philadelphia, PA" to the search
 
-Create `.env` file in backend directory:
+### Empty data
+- Philadelphia APIs may rate limit
+- Wait a minute and retry
+- Check browser console for errors
 
-```env
-PORT=3000
-NODE_ENV=production
-CACHE_TTL=3600
-```
+### Map not loading
+- Check internet connection
+- Ensure port 3000 is available
 
-### Cache Settings
+## 🗺️ Future Ideas
 
-Data is cached for 1 hour by default. To change:
-
-```javascript
-// In server.js
-const cache = new NodeCache({ stdTTL: 7200 }); // 2 hours
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how:
-
-1. Fork the repo
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📝 Roadmap
-
-- [ ] User authentication
-- [ ] Save favorite locations
-- [ ] Email alerts for new incidents
+- [ ] School district ratings
+- [ ] Transit score (SEPTA integration)
+- [ ] Walk score calculation
+- [ ] Save/compare locations
 - [ ] Historical trend charts
-- [ ] School ratings integration
-- [ ] Transit score (SEPTA data)
-- [ ] Air quality data
-- [ ] Mobile app (React Native)
+- [ ] Neighborhood boundaries overlay
 - [ ] Export PDF reports
-- [ ] Neighborhood comparison tool
-- [ ] Community reviews
+- [ ] Mobile app
 
-## 🐛 Known Issues
+## 📝 License
 
-- **CORS Errors:** If you see CORS errors, make sure you're accessing the app through the backend (not opening index.html directly)
-- **Empty Data:** Philadelphia APIs may rate limit. Try again in a few minutes.
-- **Slow Initial Load:** First request may be slow due to cold start (free hosting)
+MIT License - feel free to use and modify!
 
-## 📚 Resources
+## 🙏 Credits
 
-- [OpenDataPhilly](https://opendataphilly.org/) - Data source
-- [Leaflet.js Docs](https://leafletjs.com/) - Mapping library
-- [Express.js Docs](https://expressjs.com/) - Backend framework
-- [Node.js Docs](https://nodejs.org/) - Runtime
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **City of Philadelphia** for providing open data
-- **OpenStreetMap** for geocoding service
-- **Leaflet.js** for mapping library
-- **Carto** for hosting Philadelphia's data
-
-## 📧 Contact
-
-Have questions? Found a bug? Want to contribute?
-
-- Create an [Issue](https://github.com/YOUR_USERNAME/philly-evaluator/issues)
-- Email: your-email@example.com
-- Twitter: [@yourhandle](https://twitter.com/yourhandle)
-
-## 🌟 Star History
-
-If you find this project useful, please consider giving it a star! ⭐
+- **City of Philadelphia** - Open data
+- **OpenStreetMap** - Geocoding
+- **CARTO** - Map tiles & data hosting
+- **Leaflet.js** - Map library
 
 ---
 
-**Built with ❤️ for Philadelphia residents**
+**Made with ❤️ for Philadelphia apartment hunters**
 
-Made by [Your Name] | [GitHub](https://github.com/YOUR_USERNAME) | [Website](https://your-website.com)
+*Have questions? Open an issue!*
