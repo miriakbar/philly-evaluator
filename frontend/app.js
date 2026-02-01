@@ -10,7 +10,8 @@ const state = {
     markers: [],
     locations: [],
     selectedIndex: null,
-    isLoading: false
+    isLoading: false,
+    timeFilterMonths: 12 // Default: 1 year
 };
 
 // ============================================
@@ -24,40 +25,46 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initMap() {
-    // Dark map style
     state.map = L.map('map', {
         zoomControl: true,
         attributionControl: false
     }).setView([39.9526, -75.1652], 12);
 
-    // Dark tile layer (CartoDB Dark Matter)
+    // Dark tile layer
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19,
         subdomains: 'abcd'
     }).addTo(state.map);
 
-    // Add attribution
     L.control.attribution({
         prefix: false,
         position: 'bottomright'
-    }).addTo(state.map).addAttribution('© <a href="https://carto.com/">CARTO</a> © <a href="https://osm.org/copyright">OpenStreetMap</a>');
+    }).addTo(state.map).addAttribution('© <a href="https://carto.com/">CARTO</a>');
 }
 
 function setupEventListeners() {
     const input = document.getElementById('addressInput');
-    
     input.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') searchArea();
     });
+}
 
-    // Focus animation
-    input.addEventListener('focus', () => {
-        input.parentElement.style.transform = 'scale(1.01)';
-    });
+// ============================================
+// Time Filter
+// ============================================
 
-    input.addEventListener('blur', () => {
-        input.parentElement.style.transform = 'scale(1)';
+function setTimeFilter(months) {
+    state.timeFilterMonths = months;
+    
+    // Update button states
+    document.querySelectorAll('.time-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (parseInt(btn.dataset.months) === months) {
+            btn.classList.add('active');
+        }
     });
+    
+    showToast(`Time filter set to ${months} months`, 'success');
 }
 
 // ============================================
@@ -83,11 +90,11 @@ async function searchArea() {
         const location = await geocodeAddress(address);
         showLoading(true, 'Gathering neighborhood data...');
         
-        // Step 2: Fetch all data in parallel
-        const radius = 0.008; // ~0.5 mile
+        // Step 2: Calculate date range based on filter
+        const radius = 0.008;
         const endDate = new Date();
         const startDate = new Date();
-        startDate.setFullYear(startDate.getFullYear() - 1);
+        startDate.setMonth(startDate.getMonth() - state.timeFilterMonths);
         
         const dateParams = {
             startDate: startDate.toISOString().split('T')[0],
@@ -96,6 +103,7 @@ async function searchArea() {
 
         showLoading(true, 'Analyzing safety data...');
         
+        // Step 3: Fetch all data in parallel
         const [crimeData, data311, violations, parks] = await Promise.all([
             fetchCrimeData(location.lat, location.lon, radius, dateParams),
             fetch311Data(location.lat, location.lon, radius, dateParams),
@@ -105,20 +113,21 @@ async function searchArea() {
 
         showLoading(true, 'Calculating scores...');
 
-        // Step 3: Analyze and score
+        // Step 4: Analyze
         const analysis = analyzeNeighborhood(crimeData, data311, violations, parks);
         
-        // Step 4: Store location
+        // Step 5: Store
         const locationData = {
             location,
             analysis,
             rawData: { crimeData, data311, violations, parks },
+            timeFilter: state.timeFilterMonths,
             timestamp: new Date().toISOString()
         };
         
         state.locations.push(locationData);
         
-        // Step 5: Update UI
+        // Step 6: Update UI
         addMarkerToMap(locationData, state.locations.length - 1);
         renderLocationsList();
         selectLocation(state.locations.length - 1);
@@ -138,12 +147,10 @@ async function searchArea() {
 
 async function geocodeAddress(address) {
     const response = await fetch(`${API_BASE_URL}/api/geocode?address=${encodeURIComponent(address)}`);
-    
     if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || 'Could not find address');
     }
-    
     return response.json();
 }
 
@@ -154,8 +161,7 @@ async function fetchCrimeData(lat, lon, radius, { startDate, endDate }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lat, lon, radius, startDate, endDate })
         });
-        
-        if (!response.ok) throw new Error('Crime data unavailable');
+        if (!response.ok) return [];
         const data = await response.json();
         return data.rows || [];
     } catch (e) {
@@ -171,8 +177,7 @@ async function fetch311Data(lat, lon, radius, { startDate, endDate }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lat, lon, radius, startDate, endDate })
         });
-        
-        if (!response.ok) throw new Error('311 data unavailable');
+        if (!response.ok) return [];
         const data = await response.json();
         return data.rows || [];
     } catch (e) {
@@ -188,8 +193,7 @@ async function fetchViolationsData(lat, lon, radius) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lat, lon, radius })
         });
-        
-        if (!response.ok) throw new Error('Violations data unavailable');
+        if (!response.ok) return [];
         const data = await response.json();
         return data.rows || [];
     } catch (e) {
@@ -203,9 +207,8 @@ async function fetchParksData(lat, lon, radius) {
         const response = await fetch(`${API_BASE_URL}/api/parks-data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, radius: radius * 2 }) // Larger radius for parks
+            body: JSON.stringify({ lat, lon, radius: radius * 2 })
         });
-        
         if (!response.ok) return [];
         const data = await response.json();
         return data.rows || [];
@@ -220,25 +223,13 @@ async function fetchParksData(lat, lon, radius) {
 // ============================================
 
 function analyzeNeighborhood(crimeData, data311, violations, parks) {
-    // Crime Analysis
     const crimeAnalysis = analyzeCrime(crimeData);
-    
-    // 311 Analysis (Community Issues)
     const communityAnalysis = analyzeCommunity(data311);
-    
-    // Property Analysis
     const propertyAnalysis = analyzeProperty(violations);
-    
-    // Parks & Recreation
     const parksAnalysis = analyzeParks(parks);
     
-    // Calculate overall score (weighted)
-    const weights = {
-        safety: 0.35,
-        community: 0.25,
-        property: 0.20,
-        parks: 0.20
-    };
+    // Weighted score
+    const weights = { safety: 0.35, community: 0.25, property: 0.20, parks: 0.20 };
     
     const overallScore = Math.round(
         crimeAnalysis.score * weights.safety +
@@ -262,14 +253,10 @@ function analyzeNeighborhood(crimeData, data311, violations, parks) {
 
 function analyzeCrime(data) {
     const total = data.length;
-    
-    // Categorize crimes
     const violentTypes = ['Aggravated Assault', 'Robbery', 'Rape', 'Homicide', 'Assault'];
     const propertyTypes = ['Burglary', 'Theft', 'Motor Vehicle Theft', 'Arson', 'Vandalism'];
     
-    let violent = 0;
-    let property = 0;
-    let other = 0;
+    let violent = 0, property = 0, other = 0;
     
     data.forEach(crime => {
         const type = crime.text_general_code || '';
@@ -278,42 +265,23 @@ function analyzeCrime(data) {
         else other++;
     });
     
-    // Score calculation (lower crime = higher score)
-    // Baseline: 0 crimes = 100, scale down from there
     let score = 100;
-    score -= Math.min(30, total * 0.2);        // Up to -30 for total volume
-    score -= Math.min(40, violent * 2);         // Up to -40 for violent crimes
-    score -= Math.min(20, property * 0.5);      // Up to -20 for property crimes
-    
+    score -= Math.min(30, total * 0.15);
+    score -= Math.min(40, violent * 2);
+    score -= Math.min(20, property * 0.3);
     score = Math.max(0, Math.min(100, score));
     
-    // Recent incidents (last 10)
-    const recentIncidents = data
-        .slice(0, 10)
-        .map(c => ({
-            type: c.text_general_code || 'Unknown',
-            date: c.dispatch_date_time ? new Date(c.dispatch_date_time).toLocaleDateString() : 'Unknown'
-        }));
+    const recentIncidents = data.slice(0, 10).map(c => ({
+        type: c.text_general_code || 'Unknown',
+        date: c.dispatch_date_time ? new Date(c.dispatch_date_time).toLocaleDateString() : 'Unknown'
+    }));
     
-    return {
-        score: Math.round(score),
-        total,
-        violent,
-        property,
-        other,
-        recentIncidents,
-        assessment: getAssessment('crime', total, violent)
-    };
+    return { score: Math.round(score), total, violent, property, other, recentIncidents };
 }
 
 function analyzeCommunity(data) {
     const total = data.length;
-    
-    // Categorize 311 requests
-    let noise = 0;
-    let dumping = 0;
-    let maintenance = 0;
-    let other = 0;
+    let noise = 0, dumping = 0, maintenance = 0, other = 0;
     
     data.forEach(req => {
         const type = (req.service_name || '').toLowerCase();
@@ -323,31 +291,19 @@ function analyzeCommunity(data) {
         else other++;
     });
     
-    // Score calculation
     let score = 100;
-    score -= Math.min(20, total * 0.1);
-    score -= Math.min(25, noise * 1.5);      // Noise heavily penalized
-    score -= Math.min(20, dumping * 1);       // Dumping penalized
-    score -= Math.min(15, maintenance * 0.3); // Maintenance less penalized (shows engagement)
-    
+    score -= Math.min(20, total * 0.08);
+    score -= Math.min(25, noise * 1.2);
+    score -= Math.min(20, dumping * 0.8);
+    score -= Math.min(10, maintenance * 0.2);
     score = Math.max(0, Math.min(100, score));
     
-    return {
-        score: Math.round(score),
-        total,
-        noise,
-        dumping,
-        maintenance,
-        other,
-        assessment: getAssessment('community', total, noise)
-    };
+    return { score: Math.round(score), total, noise, dumping, maintenance, other };
 }
 
 function analyzeProperty(data) {
     const total = data.length;
-    
-    let open = 0;
-    let closed = 0;
+    let open = 0, closed = 0;
     
     data.forEach(v => {
         const status = (v.casestatus || '').toLowerCase();
@@ -355,45 +311,20 @@ function analyzeProperty(data) {
         else closed++;
     });
     
-    // Score calculation
     let score = 100;
-    score -= Math.min(25, total * 0.3);
-    score -= Math.min(35, open * 1.5);  // Open violations heavily penalized
-    
+    score -= Math.min(25, total * 0.25);
+    score -= Math.min(35, open * 1.2);
     score = Math.max(0, Math.min(100, score));
     
-    return {
-        score: Math.round(score),
-        total,
-        open,
-        closed,
-        assessment: getAssessment('property', total, open)
-    };
+    return { score: Math.round(score), total, open, closed };
 }
 
 function analyzeParks(data) {
     const count = data.length;
-    
-    // More parks nearby = higher score
-    let score = 50; // Base score
-    score += Math.min(50, count * 10); // Each park adds up to 10 points, max 50
-    
+    let score = 50 + Math.min(50, count * 10);
     score = Math.max(0, Math.min(100, score));
     
-    const types = {};
-    data.forEach(p => {
-        const type = p.site_type || 'Park';
-        types[type] = (types[type] || 0) + 1;
-    });
-    
-    return {
-        score: Math.round(score),
-        count,
-        types,
-        assessment: count >= 3 ? 'Excellent access to green spaces' : 
-                   count >= 1 ? 'Some parks nearby' : 
-                   'Limited green space access'
-    };
+    return { score: Math.round(score), count };
 }
 
 // ============================================
@@ -422,29 +353,10 @@ function getScoreColor(score) {
 }
 
 function getScoreDescription(score) {
-    if (score >= 85) return 'This area shows strong indicators across safety, community engagement, and livability metrics.';
+    if (score >= 85) return 'This area shows strong indicators across safety, community, and livability.';
     if (score >= 70) return 'A solid neighborhood with good fundamentals and minor areas for improvement.';
     if (score >= 50) return 'This area has both strengths and challenges typical of urban neighborhoods.';
     return 'This area shows some concerns that potential residents should carefully consider.';
-}
-
-function getAssessment(type, total, severe) {
-    switch(type) {
-        case 'crime':
-            if (total < 20 && severe < 3) return 'Low crime area with minimal violent incidents';
-            if (total < 50) return 'Moderate activity typical of urban areas';
-            return 'Higher than average activity - stay aware';
-        case 'community':
-            if (total < 30) return 'Quiet neighborhood with few complaints';
-            if (severe < 10) return 'Active community with typical concerns';
-            return 'Some ongoing noise or cleanliness issues';
-        case 'property':
-            if (total < 10) return 'Well-maintained properties in the area';
-            if (severe < 5) return 'Some property issues being addressed';
-            return 'Multiple open violations in the area';
-        default:
-            return '';
-    }
 }
 
 // ============================================
@@ -457,36 +369,29 @@ function addMarkerToMap(locationData, index) {
     
     const markerIcon = L.divIcon({
         className: 'custom-marker',
-        html: `
-            <div style="
-                background: ${color};
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                border: 3px solid rgba(255,255,255,0.9);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-                font-weight: 700;
-                font-size: 14px;
-                font-family: 'DM Sans', sans-serif;
-            ">${analysis.overallScore}</div>
-        `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20]
+        html: `<div style="
+            background: ${color};
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 3px solid rgba(255,255,255,0.9);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 13px;
+            font-family: 'DM Sans', sans-serif;
+        ">${analysis.overallScore}</div>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
     });
 
-    const marker = L.marker([location.lat, location.lon], { icon: markerIcon })
-        .addTo(state.map);
-
+    const marker = L.marker([location.lat, location.lon], { icon: markerIcon }).addTo(state.map);
+    
     const popupContent = createPopupContent(locationData, index);
-    marker.bindPopup(popupContent, {
-        maxWidth: 280,
-        className: 'custom-popup'
-    });
-
+    marker.bindPopup(popupContent, { maxWidth: 260, className: 'custom-popup' });
     marker.on('click', () => selectLocation(index));
     
     state.markers.push(marker);
@@ -496,13 +401,12 @@ function addMarkerToMap(locationData, index) {
 function createPopupContent(locationData, index) {
     const { location, analysis } = locationData;
     const { categories } = analysis;
-    const scoreClass = getScoreClass(analysis.overallScore);
     const color = getScoreColor(analysis.overallScore);
     
     return `
         <div class="popup-inner">
             <div class="popup-score">
-                <div class="popup-score-circle score-${scoreClass}" style="background: ${color}20; color: ${color};">
+                <div class="popup-score-circle" style="background: ${color}22; color: ${color};">
                     ${analysis.overallScore}
                 </div>
                 <div class="popup-title">${getShortAddress(location.display_name)}</div>
@@ -591,7 +495,7 @@ function selectLocation(index) {
 
 function openDetailPanel(index) {
     const loc = state.locations[index];
-    const { location, analysis } = loc;
+    const { location, analysis, timeFilter } = loc;
     const { categories } = analysis;
     const scoreClass = getScoreClass(analysis.overallScore);
     const color = getScoreColor(analysis.overallScore);
@@ -605,7 +509,7 @@ function openDetailPanel(index) {
     
     const scoreCircle = document.getElementById('detailScoreCircle');
     scoreCircle.className = `detail-score-circle score-${scoreClass}`;
-    scoreCircle.style.background = `${color}20`;
+    scoreCircle.style.background = `${color}22`;
     scoreCircle.style.color = color;
     
     // Update content
@@ -633,16 +537,16 @@ function openDetailPanel(index) {
                 <div class="metric-icon parks">🌳</div>
                 <div class="metric-value">${categories.parks.count}</div>
                 <div class="metric-label">Parks Nearby</div>
-                <div class="metric-detail">${categories.parks.assessment}</div>
+                <div class="metric-detail">${categories.parks.count > 0 ? 'Recreation access' : 'Limited green space'}</div>
             </div>
         </div>
         
         <div class="breakdown-section">
             <div class="breakdown-title">Score Breakdown</div>
-            ${renderBreakdownBar('Safety', categories.safety.score, '#ef4444')}
-            ${renderBreakdownBar('Community', categories.community.score, '#a855f7')}
-            ${renderBreakdownBar('Property', categories.property.score, '#f59e0b')}
-            ${renderBreakdownBar('Green Space', categories.parks.score, '#22c55e')}
+            ${renderBreakdownBar('Safety (35%)', categories.safety.score, '#ef4444')}
+            ${renderBreakdownBar('Community (25%)', categories.community.score, '#a855f7')}
+            ${renderBreakdownBar('Property (20%)', categories.property.score, '#f59e0b')}
+            ${renderBreakdownBar('Green Space (20%)', categories.parks.score, '#22c55e')}
         </div>
         
         <div class="breakdown-section">
@@ -656,8 +560,24 @@ function openDetailPanel(index) {
                 <span class="breakdown-value">${categories.community.dumping}</span>
             </div>
             <div class="breakdown-item">
-                <span class="breakdown-name">🔧 Maintenance</span>
+                <span class="breakdown-name">🔧 Street Maintenance</span>
                 <span class="breakdown-value">${categories.community.maintenance}</span>
+            </div>
+        </div>
+        
+        <div class="breakdown-section">
+            <div class="breakdown-title">Crime Breakdown</div>
+            <div class="breakdown-item">
+                <span class="breakdown-name">⚠️ Violent Crimes</span>
+                <span class="breakdown-value">${categories.safety.violent}</span>
+            </div>
+            <div class="breakdown-item">
+                <span class="breakdown-name">🏠 Property Crimes</span>
+                <span class="breakdown-value">${categories.safety.property}</span>
+            </div>
+            <div class="breakdown-item">
+                <span class="breakdown-name">📋 Other Incidents</span>
+                <span class="breakdown-value">${categories.safety.other}</span>
             </div>
         </div>
         
@@ -676,19 +596,18 @@ function openDetailPanel(index) {
         ` : ''}
         
         <div class="breakdown-section">
-            <div class="breakdown-title">Data Sources</div>
-            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.8;">
-                Crime data: Philadelphia Police Department<br>
-                311 data: Philly311<br>
-                Violations: Department of L&I<br>
-                Parks: Philadelphia Parks & Recreation<br>
-                <br>
-                <em>Data within 0.5 mile radius, past 12 months</em>
+            <div class="breakdown-title">Data Info</div>
+            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.7;">
+                📅 Time range: ${timeFilter || 12} months<br>
+                📍 Radius: ~0.5 miles<br>
+                🔄 Data from Philadelphia Open Data<br>
             </div>
         </div>
     `;
     
+    // Open panel
     document.getElementById('detailPanel').classList.add('open');
+    document.getElementById('detailOverlay').classList.add('open');
 }
 
 function renderBreakdownBar(label, score, color) {
@@ -705,6 +624,7 @@ function renderBreakdownBar(label, score, color) {
 
 function closeDetailPanel() {
     document.getElementById('detailPanel').classList.remove('open');
+    document.getElementById('detailOverlay').classList.remove('open');
 }
 
 // ============================================
@@ -719,11 +639,9 @@ function getShortAddress(fullAddress) {
 
 function showLoading(show, text = 'Loading...') {
     const overlay = document.getElementById('loadingOverlay');
-    const textEl = document.getElementById('loadingText');
-    
+    document.getElementById('loadingText').textContent = text;
     if (show) {
         overlay.classList.add('active');
-        textEl.textContent = text;
     } else {
         overlay.classList.remove('active');
     }
@@ -731,24 +649,18 @@ function showLoading(show, text = 'Loading...') {
 
 function showToast(message, type = 'success') {
     const toast = document.getElementById('toast');
-    const icon = document.getElementById('toastIcon');
-    const msg = document.getElementById('toastMessage');
-    
+    document.getElementById('toastIcon').textContent = type === 'success' ? '✓' : '✕';
+    document.getElementById('toastMessage').textContent = message;
     toast.className = `toast ${type}`;
-    icon.textContent = type === 'success' ? '✓' : '✕';
-    msg.textContent = message;
-    
     toast.classList.add('show');
-    
-    setTimeout(() => {
-        toast.classList.remove('show');
-    }, 3000);
+    setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-// Make functions globally available
+// Global functions
 window.searchArea = searchArea;
 window.selectLocation = selectLocation;
 window.openDetailPanel = openDetailPanel;
 window.closeDetailPanel = closeDetailPanel;
+window.setTimeFilter = setTimeFilter;
 
-console.log('🏠 Philly Nest - Ready to explore neighborhoods!');
+console.log('🏠 Philly Nest ready!');
