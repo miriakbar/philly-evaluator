@@ -47,6 +47,15 @@ function setupEventListeners() {
     input.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') searchArea();
     });
+
+    // *** VITAL FIX: Global Click Listener for Popups ***
+    // Leaflet creates popups dynamically, so we listen to the document
+    document.addEventListener('click', function(e) {
+        if (e.target && e.target.classList.contains('js-view-analysis')) {
+            const index = e.target.getAttribute('data-index');
+            openDetailPanel(index);
+        }
+    });
 }
 
 // ============================================
@@ -392,6 +401,8 @@ function addMarkerToMap(locationData, index) {
     
     const popupContent = createPopupContent(locationData, index);
     marker.bindPopup(popupContent, { maxWidth: 260, className: 'custom-popup' });
+    
+    // When marker is clicked, highlight in sidebar
     marker.on('click', () => selectLocation(index));
     
     state.markers.push(marker);
@@ -403,29 +414,54 @@ function createPopupContent(locationData, index) {
     const { categories } = analysis;
     const color = getScoreColor(analysis.overallScore);
     
+    // REDESIGNED POPUP: Uses 'data-index' instead of 'onclick' for better reliability
     return `
         <div class="popup-inner">
-            <div class="popup-score">
-                <div class="popup-score-circle" style="background: ${color}22; color: ${color};">
-                    ${analysis.overallScore}
-                </div>
-                <div class="popup-title">${getShortAddress(location.display_name)}</div>
+            <div class="popup-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; margin-bottom: 8px;">
+                <div class="popup-title" style="font-size: 14px;">${getShortAddress(location.display_name)}</div>
             </div>
+            
+            <div class="popup-score" style="justify-content: space-between;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <div class="popup-score-circle" style="background: ${color}22; color: ${color}; border: 1px solid ${color}; width:32px; height:32px; font-size:12px;">
+                        ${analysis.overallScore}
+                    </div>
+                    <span style="font-size:12px; color:#a1a1aa;">${analysis.scoreLabel}</span>
+                </div>
+            </div>
+
             <div class="popup-stats">
                 <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.safety.total}</div>
+                    <div class="popup-stat-value" style="color:#fff;">${categories.safety.total}</div>
                     <div class="popup-stat-label">Crimes</div>
                 </div>
                 <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.community.total}</div>
+                    <div class="popup-stat-value" style="color:#fff;">${categories.community.total}</div>
                     <div class="popup-stat-label">311 Calls</div>
                 </div>
                 <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.parks.count}</div>
+                    <div class="popup-stat-value" style="color:#fff;">${categories.parks.count}</div>
                     <div class="popup-stat-label">Parks</div>
                 </div>
             </div>
-            <button class="popup-btn" onclick="openDetailPanel(${index})">View Full Analysis</button>
+            
+            <button class="popup-btn js-view-analysis" data-index="${index}" style="
+                margin-top: 12px;
+                background: linear-gradient(135deg, ${color} 0%, ${color}dd 100%);
+                box-shadow: 0 4px 12px ${color}40;
+                border: none;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                font-size: 10px;
+                padding: 12px;
+                width: 100%;
+                border-radius: 6px;
+                color: #000;
+                font-weight: 700;
+                cursor: pointer;
+            ">
+                View Full Analysis
+            </button>
         </div>
     `;
 }
