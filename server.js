@@ -4,17 +4,14 @@ const path = require('path');
 const NodeCache = require('node-cache');
 
 const app = express();
-const cache = new NodeCache({ stdTTL: 3600 }); // Cache for 1 hour
+const cache = new NodeCache({ stdTTL: 3600 });
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'frontend')));
 
-// Request logging
 app.use((req, res, next) => {
-    const timestamp = new Date().toISOString();
-    console.log(`${timestamp} | ${req.method} ${req.path}`);
+    console.log(`${new Date().toISOString()} | ${req.method} ${req.path}`);
     next();
 });
 
@@ -53,10 +50,10 @@ async function fetchPhillyData(query, description = 'data') {
 }
 
 // ============================================
-// API Endpoints
+// Geocoding using Philadelphia's address data in Carto
+// Uses the 'opa_properties_public' table which has addresses and coordinates
 // ============================================
 
-// Geocoding (OpenStreetMap Nominatim)
 app.get('/api/geocode', async (req, res) => {
     try {
         const { address } = req.query;
@@ -72,39 +69,90 @@ app.get('/api/geocode', async (req, res) => {
             return res.json(cached);
         }
         
-        const searchAddress = address.toLowerCase().includes('philadelphia') 
-            ? address 
-            : `${address}, Philadelphia, PA`;
-            
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchAddress)}&limit=1`;
+        // Clean up the address for searching
+        // Remove "Philadelphia", "PA", zip codes, etc.
+        let searchAddr = address
+            .replace(/,?\s*(philadelphia|phila|philly|pa|pennsylvania|\d{5}(-\d{4})?)/gi, '')
+            .replace(/[,]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toUpperCase();
         
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'PhillyNest/2.0 (Neighborhood Analysis Tool)' }
-        });
+        console.log(`🔍 Searching for: "${searchAddr}"`);
         
-        if (!response.ok) {
-            throw new Error('Geocoding service unavailable');
+        // Search in opa_properties_public table (has lat/lng for all Philadelphia properties)
+        // This table contains all properties in Philadelphia with their coordinates
+        const query = `
+            SELECT 
+                location as address,
+                lat,
+                lng,
+                ST_Y(the_geom) as geom_lat,
+                ST_X(the_geom) as geom_lng
+            FROM opa_properties_public 
+            WHERE UPPER(location) LIKE '%${searchAddr.replace(/'/g, "''")}%'
+            AND the_geom IS NOT NULL
+            LIMIT 1
+        `;
+        
+        let rows = [];
+        try {
+            rows = await fetchPhillyData(query, 'geocode');
+        } catch (e) {
+            console.log('Primary geocode failed, trying street_centerline...');
         }
         
-        const data = await response.json();
+        // If no results, try a more flexible search
+        if (rows.length === 0) {
+            // Extract street number and name
+            const parts = searchAddr.split(' ');
+            const streetNum = parts[0];
+            const streetName = parts.slice(1).join(' ');
+            
+            if (streetNum && streetName) {
+                const flexQuery = `
+                    SELECT 
+                        location as address,
+                        lat,
+                        lng,
+                        ST_Y(the_geom) as geom_lat,
+                        ST_X(the_geom) as geom_lng
+                    FROM opa_properties_public 
+                    WHERE UPPER(location) LIKE '${streetNum} %${streetName.split(' ')[0]}%'
+                    AND the_geom IS NOT NULL
+                    LIMIT 1
+                `;
+                
+                try {
+                    rows = await fetchPhillyData(flexQuery, 'geocode (flexible)');
+                } catch (e) {
+                    console.log('Flexible geocode also failed');
+                }
+            }
+        }
         
-        if (!data || data.length === 0) {
-            return res.status(404).json({ error: 'Address not found. Try a Philadelphia address.' });
+        if (rows.length === 0) {
+            return res.status(404).json({ 
+                error: 'Address not found. Try format like "1234 MARKET ST"' 
+            });
+        }
+        
+        const row = rows[0];
+        const lat = row.lat || row.geom_lat;
+        const lng = row.lng || row.geom_lng;
+        
+        if (!lat || !lng) {
+            return res.status(404).json({ error: 'Could not get coordinates for this address' });
         }
         
         const result = {
-            lat: parseFloat(data[0].lat),
-            lon: parseFloat(data[0].lon),
-            display_name: data[0].display_name
+            lat: parseFloat(lat),
+            lon: parseFloat(lng),
+            display_name: `${row.address}, Philadelphia, PA`
         };
         
-        // Verify it's in Philadelphia area (rough bounds)
-        if (result.lat < 39.85 || result.lat > 40.15 || result.lon < -75.35 || result.lon > -74.9) {
-            return res.status(400).json({ error: 'Address must be within Philadelphia area' });
-        }
-        
         cache.set(cacheKey, result);
-        console.log(`📍 Geocoded: ${result.display_name.substring(0, 50)}...`);
+        console.log(`📍 Found: ${result.display_name} (${result.lat}, ${result.lon})`);
         res.json(result);
         
     } catch (error) {
@@ -113,7 +161,10 @@ app.get('/api/geocode', async (req, res) => {
     }
 });
 
-// Crime Data (incidents_part1_part2)
+// ============================================
+// Crime Data
+// ============================================
+
 app.post('/api/crime-data', async (req, res) => {
     try {
         const { lat, lon, radius, startDate, endDate } = req.body;
@@ -128,7 +179,6 @@ app.post('/api/crime-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
-        // Use ST_Y/ST_X to extract coordinates from geometry
         const query = `
             SELECT 
                 text_general_code, 
@@ -155,7 +205,10 @@ app.post('/api/crime-data', async (req, res) => {
     }
 });
 
-// 311 Service Requests (public_cases_fc)
+// ============================================
+// 311 Service Requests
+// ============================================
+
 app.post('/api/311-data', async (req, res) => {
     try {
         const { lat, lon, radius, startDate, endDate } = req.body;
@@ -197,7 +250,10 @@ app.post('/api/311-data', async (req, res) => {
     }
 });
 
-// Property Violations (violations)
+// ============================================
+// Property Violations
+// ============================================
+
 app.post('/api/violations-data', async (req, res) => {
     try {
         const { lat, lon, radius } = req.body;
@@ -212,8 +268,6 @@ app.post('/api/violations-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
-        // Table: violations
-        // Columns: violationcodetitle, violationdate, violationstatus
         const query = `
             SELECT 
                 violationcodetitle AS violationdescription,
@@ -240,7 +294,10 @@ app.post('/api/violations-data', async (req, res) => {
     }
 });
 
-// Parks & Recreation Sites (ppr_facilities)
+// ============================================
+// Parks & Recreation
+// ============================================
+
 app.post('/api/parks-data', async (req, res) => {
     try {
         const { lat, lon, radius } = req.body;
@@ -255,7 +312,6 @@ app.post('/api/parks-data', async (req, res) => {
             return res.json({ rows: cached, cached: true });
         }
         
-        // Try ppr_facilities table for parks/rec centers
         const query = `
             SELECT 
                 asset_name,
@@ -274,8 +330,6 @@ app.post('/api/parks-data', async (req, res) => {
             cache.set(cacheKey, rows);
             res.json({ rows, cached: false });
         } catch (e) {
-            // If ppr_facilities doesn't work, return empty
-            console.log('Parks API unavailable, returning empty');
             res.json({ rows: [], cached: false });
         }
         
@@ -285,17 +339,17 @@ app.post('/api/parks-data', async (req, res) => {
     }
 });
 
+// ============================================
 // Health Check
+// ============================================
+
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'healthy',
         service: 'Philly Nest API',
-        version: '2.0.0',
+        version: '2.1.0',
         timestamp: new Date().toISOString(),
-        cache: {
-            keys: cache.keys().length,
-            stats: cache.getStats()
-        }
+        note: 'Using Carto-based geocoding (no external APIs needed)'
     });
 });
 
@@ -304,7 +358,7 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend/index.html'));
 });
 
-// 404 handler
+// 404
 app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
 });
@@ -315,10 +369,7 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// ============================================
-// Start Server
-// ============================================
-
+// Start
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
@@ -328,7 +379,7 @@ app.listen(PORT, () => {
     console.log('═══════════════════════════════════════════');
     console.log(`📍 Server: http://localhost:${PORT}`);
     console.log(`💾 Cache TTL: 1 hour`);
-    console.log('📊 Data: Philadelphia Open Data (Carto)');
+    console.log('📊 Geocoding: Philadelphia OPA (via Carto)');
     console.log('═══════════════════════════════════════════');
     console.log('');
 });
