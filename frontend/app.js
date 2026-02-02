@@ -1,143 +1,118 @@
-// ============================================
 // Philly Nest - Neighborhood Intelligence
-// ============================================
 
 const API_BASE_URL = window.location.origin;
 
-// Application State
 const state = {
     map: null,
     markers: [],
     locations: [],
     selectedIndex: null,
     isLoading: false,
-    timeFilterMonths: 12 // Default: 1 year
+    timeFilterMonths: 12
 };
 
 // ============================================
-// Initialization
+// INIT
 // ============================================
 
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
     setupEventListeners();
-    console.log('🏠 Philly Nest initialized');
+    console.log('🏠 Philly Nest ready');
 });
 
 function initMap() {
-    state.map = L.map('map', {
-        zoomControl: true,
-        attributionControl: false
-    }).setView([39.9526, -75.1652], 12);
-
-    // Dark tile layer
+    state.map = L.map('map').setView([39.9526, -75.1652], 12);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19,
         subdomains: 'abcd'
     }).addTo(state.map);
-
-    L.control.attribution({
-        prefix: false,
-        position: 'bottomright'
-    }).addTo(state.map).addAttribution('© <a href="https://carto.com/">CARTO</a>');
 }
 
 function setupEventListeners() {
-    const input = document.getElementById('addressInput');
-    input.addEventListener('keypress', (e) => {
+    // Search
+    document.getElementById('addressInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') searchArea();
     });
-}
+    document.getElementById('searchBtn').addEventListener('click', searchArea);
 
-// ============================================
-// Time Filter
-// ============================================
-
-function setTimeFilter(months) {
-    state.timeFilterMonths = months;
-    
-    // Update button states
+    // Time filter buttons
     document.querySelectorAll('.time-btn').forEach(btn => {
-        btn.classList.remove('active');
-        if (parseInt(btn.dataset.months) === months) {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-        }
+            state.timeFilterMonths = parseInt(btn.dataset.months);
+            showToast(`Time filter: ${state.timeFilterMonths} months`, 'success');
+        });
     });
-    
-    showToast(`Time filter set to ${months} months`, 'success');
+
+    // Modal close
+    document.getElementById('modalClose').addEventListener('click', closeModal);
+    document.getElementById('modalOverlay').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeModal();
+    });
 }
 
 // ============================================
-// Search & Data Fetching
+// SEARCH
 // ============================================
 
 async function searchArea() {
     const address = document.getElementById('addressInput').value.trim();
-    
     if (!address) {
-        showToast('Please enter an address', 'error');
+        showToast('Enter an address', 'error');
         return;
     }
-
     if (state.isLoading) return;
-    
+
     state.isLoading = true;
     showLoading(true, 'Finding location...');
     document.getElementById('searchBtn').disabled = true;
 
     try {
-        // Step 1: Geocode
         const location = await geocodeAddress(address);
-        showLoading(true, 'Gathering neighborhood data...');
-        
-        // Step 2: Calculate date range based on filter
+        showLoading(true, 'Fetching data...');
+
         const radius = 0.008;
         const endDate = new Date();
         const startDate = new Date();
         startDate.setMonth(startDate.getMonth() - state.timeFilterMonths);
-        
+
         const dateParams = {
             startDate: startDate.toISOString().split('T')[0],
             endDate: endDate.toISOString().split('T')[0]
         };
 
-        showLoading(true, 'Analyzing safety data...');
-        
-        // Step 3: Fetch all data in parallel
         const [crimeData, data311, violations, parks] = await Promise.all([
-            fetchCrimeData(location.lat, location.lon, radius, dateParams),
-            fetch311Data(location.lat, location.lon, radius, dateParams),
-            fetchViolationsData(location.lat, location.lon, radius),
-            fetchParksData(location.lat, location.lon, radius)
+            fetchData('/api/crime-data', { lat: location.lat, lon: location.lon, radius, ...dateParams }),
+            fetchData('/api/311-data', { lat: location.lat, lon: location.lon, radius, ...dateParams }),
+            fetchData('/api/violations-data', { lat: location.lat, lon: location.lon, radius }),
+            fetchData('/api/parks-data', { lat: location.lat, lon: location.lon, radius: radius * 2 })
         ]);
 
-        showLoading(true, 'Calculating scores...');
-
-        // Step 4: Analyze
+        showLoading(true, 'Analyzing...');
         const analysis = analyzeNeighborhood(crimeData, data311, violations, parks);
-        
-        // Step 5: Store
+
         const locationData = {
             location,
             analysis,
             rawData: { crimeData, data311, violations, parks },
-            timeFilter: state.timeFilterMonths,
-            timestamp: new Date().toISOString()
+            timeFilter: state.timeFilterMonths
         };
-        
+
         state.locations.push(locationData);
-        
-        // Step 6: Update UI
-        addMarkerToMap(locationData, state.locations.length - 1);
-        renderLocationsList();
-        selectLocation(state.locations.length - 1);
-        
-        showToast(`Added: ${getShortAddress(location.display_name)}`, 'success');
+        const idx = state.locations.length - 1;
+
+        addMarker(locationData, idx);
+        renderList();
+        selectLocation(idx);
+
+        showToast(`Added: ${shortAddr(location.display_name)}`, 'success');
         document.getElementById('addressInput').value = '';
 
-    } catch (error) {
-        console.error('Search error:', error);
-        showToast(error.message || 'Failed to analyze location', 'error');
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || 'Error', 'error');
     } finally {
         state.isLoading = false;
         showLoading(false);
@@ -146,521 +121,370 @@ async function searchArea() {
 }
 
 async function geocodeAddress(address) {
-    const response = await fetch(`${API_BASE_URL}/api/geocode?address=${encodeURIComponent(address)}`);
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Could not find address');
+    const res = await fetch(`${API_BASE_URL}/api/geocode?address=${encodeURIComponent(address)}`);
+    if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Address not found');
     }
-    return response.json();
+    return res.json();
 }
 
-async function fetchCrimeData(lat, lon, radius, { startDate, endDate }) {
+async function fetchData(endpoint, params) {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/crime-data`, {
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, radius, startDate, endDate })
+            body: JSON.stringify(params)
         });
-        if (!response.ok) return [];
-        const data = await response.json();
+        if (!res.ok) return [];
+        const data = await res.json();
         return data.rows || [];
     } catch (e) {
-        console.warn('Crime data fetch failed:', e);
-        return [];
-    }
-}
-
-async function fetch311Data(lat, lon, radius, { startDate, endDate }) {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/311-data`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, radius, startDate, endDate })
-        });
-        if (!response.ok) return [];
-        const data = await response.json();
-        return data.rows || [];
-    } catch (e) {
-        console.warn('311 data fetch failed:', e);
-        return [];
-    }
-}
-
-async function fetchViolationsData(lat, lon, radius) {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/violations-data`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, radius })
-        });
-        if (!response.ok) return [];
-        const data = await response.json();
-        return data.rows || [];
-    } catch (e) {
-        console.warn('Violations data fetch failed:', e);
-        return [];
-    }
-}
-
-async function fetchParksData(lat, lon, radius) {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/parks-data`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, radius: radius * 2 })
-        });
-        if (!response.ok) return [];
-        const data = await response.json();
-        return data.rows || [];
-    } catch (e) {
-        console.warn('Parks data fetch failed:', e);
+        console.warn(`${endpoint} failed:`, e);
         return [];
     }
 }
 
 // ============================================
-// Analysis Engine
+// ANALYSIS
 // ============================================
 
-function analyzeNeighborhood(crimeData, data311, violations, parks) {
-    const crimeAnalysis = analyzeCrime(crimeData);
-    const communityAnalysis = analyzeCommunity(data311);
-    const propertyAnalysis = analyzeProperty(violations);
-    const parksAnalysis = analyzeParks(parks);
-    
-    // Weighted score
-    const weights = { safety: 0.35, community: 0.25, property: 0.20, parks: 0.20 };
-    
-    const overallScore = Math.round(
-        crimeAnalysis.score * weights.safety +
-        communityAnalysis.score * weights.community +
-        propertyAnalysis.score * weights.property +
-        parksAnalysis.score * weights.parks
+function analyzeNeighborhood(crime, calls311, violations, parks) {
+    const safety = analyzeCrime(crime);
+    const community = analyzeCommunity(calls311);
+    const property = analyzeProperty(violations);
+    const green = analyzeParks(parks);
+
+    const score = Math.round(
+        safety.score * 0.35 +
+        community.score * 0.25 +
+        property.score * 0.20 +
+        green.score * 0.20
     );
-    
+
     return {
-        overallScore,
-        scoreLabel: getScoreLabel(overallScore),
-        scoreDescription: getScoreDescription(overallScore),
-        categories: {
-            safety: crimeAnalysis,
-            community: communityAnalysis,
-            property: propertyAnalysis,
-            parks: parksAnalysis
-        }
+        overallScore: score,
+        scoreLabel: getLabel(score),
+        scoreDesc: getDesc(score),
+        categories: { safety, community, property, parks: green }
     };
 }
 
 function analyzeCrime(data) {
     const total = data.length;
     const violentTypes = ['Aggravated Assault', 'Robbery', 'Rape', 'Homicide', 'Assault'];
-    const propertyTypes = ['Burglary', 'Theft', 'Motor Vehicle Theft', 'Arson', 'Vandalism'];
-    
-    let violent = 0, property = 0, other = 0;
-    
-    data.forEach(crime => {
-        const type = crime.text_general_code || '';
-        if (violentTypes.some(t => type.includes(t))) violent++;
-        else if (propertyTypes.some(t => type.includes(t))) property++;
-        else other++;
+    const propertyTypes = ['Burglary', 'Theft', 'Motor Vehicle Theft', 'Arson'];
+
+    let violent = 0, property = 0;
+    data.forEach(c => {
+        const t = c.text_general_code || '';
+        if (violentTypes.some(v => t.includes(v))) violent++;
+        else if (propertyTypes.some(p => t.includes(p))) property++;
     });
-    
-    let score = 100;
-    score -= Math.min(30, total * 0.15);
-    score -= Math.min(40, violent * 2);
-    score -= Math.min(20, property * 0.3);
+
+    let score = 100 - Math.min(30, total * 0.15) - Math.min(40, violent * 2) - Math.min(20, property * 0.3);
     score = Math.max(0, Math.min(100, score));
-    
-    const recentIncidents = data.slice(0, 10).map(c => ({
+
+    const recent = data.slice(0, 8).map(c => ({
         type: c.text_general_code || 'Unknown',
-        date: c.dispatch_date_time ? new Date(c.dispatch_date_time).toLocaleDateString() : 'Unknown'
+        date: c.dispatch_date_time ? new Date(c.dispatch_date_time).toLocaleDateString() : ''
     }));
-    
-    return { score: Math.round(score), total, violent, property, other, recentIncidents };
+
+    return { score: Math.round(score), total, violent, property, other: total - violent - property, recent };
 }
 
 function analyzeCommunity(data) {
     const total = data.length;
-    let noise = 0, dumping = 0, maintenance = 0, other = 0;
-    
-    data.forEach(req => {
-        const type = (req.service_name || '').toLowerCase();
-        if (type.includes('noise')) noise++;
-        else if (type.includes('dump') || type.includes('litter') || type.includes('trash')) dumping++;
-        else if (type.includes('street') || type.includes('light') || type.includes('pothole')) maintenance++;
-        else other++;
+    let noise = 0, dumping = 0, maintenance = 0;
+
+    data.forEach(r => {
+        const t = (r.service_name || '').toLowerCase();
+        if (t.includes('noise')) noise++;
+        else if (t.includes('dump') || t.includes('litter') || t.includes('trash')) dumping++;
+        else if (t.includes('street') || t.includes('light') || t.includes('pothole')) maintenance++;
     });
-    
-    let score = 100;
-    score -= Math.min(20, total * 0.08);
-    score -= Math.min(25, noise * 1.2);
-    score -= Math.min(20, dumping * 0.8);
-    score -= Math.min(10, maintenance * 0.2);
-    score = Math.max(0, Math.min(100, score));
-    
-    return { score: Math.round(score), total, noise, dumping, maintenance, other };
+
+    let score = 100 - Math.min(20, total * 0.08) - Math.min(25, noise * 1.2) - Math.min(20, dumping * 0.8);
+    return { score: Math.max(0, Math.min(100, Math.round(score))), total, noise, dumping, maintenance };
 }
 
 function analyzeProperty(data) {
     const total = data.length;
-    let open = 0, closed = 0;
-    
+    let open = 0;
     data.forEach(v => {
-        const status = (v.casestatus || '').toLowerCase();
-        if (status.includes('open') || status.includes('active')) open++;
-        else closed++;
+        const s = (v.casestatus || '').toLowerCase();
+        if (s.includes('open') || s.includes('active')) open++;
     });
-    
-    let score = 100;
-    score -= Math.min(25, total * 0.25);
-    score -= Math.min(35, open * 1.2);
-    score = Math.max(0, Math.min(100, score));
-    
-    return { score: Math.round(score), total, open, closed };
+
+    let score = 100 - Math.min(25, total * 0.25) - Math.min(35, open * 1.2);
+    return { score: Math.max(0, Math.min(100, Math.round(score))), total, open };
 }
 
 function analyzeParks(data) {
     const count = data.length;
-    let score = 50 + Math.min(50, count * 10);
-    score = Math.max(0, Math.min(100, score));
-    
-    return { score: Math.round(score), count };
+    const score = Math.min(100, 50 + count * 10);
+    return { score, count };
 }
 
-// ============================================
-// Scoring Helpers
-// ============================================
-
-function getScoreLabel(score) {
-    if (score >= 85) return 'Excellent';
-    if (score >= 70) return 'Good';
-    if (score >= 50) return 'Fair';
+function getLabel(s) {
+    if (s >= 85) return 'Excellent';
+    if (s >= 70) return 'Good';
+    if (s >= 50) return 'Fair';
     return 'Needs Work';
 }
 
-function getScoreClass(score) {
-    if (score >= 85) return 'excellent';
-    if (score >= 70) return 'good';
-    if (score >= 50) return 'fair';
+function getClass(s) {
+    if (s >= 85) return 'excellent';
+    if (s >= 70) return 'good';
+    if (s >= 50) return 'fair';
     return 'poor';
 }
 
-function getScoreColor(score) {
-    if (score >= 85) return '#22c55e';
-    if (score >= 70) return '#3b82f6';
-    if (score >= 50) return '#f59e0b';
+function getColor(s) {
+    if (s >= 85) return '#22c55e';
+    if (s >= 70) return '#3b82f6';
+    if (s >= 50) return '#f59e0b';
     return '#ef4444';
 }
 
-function getScoreDescription(score) {
-    if (score >= 85) return 'This area shows strong indicators across safety, community, and livability.';
-    if (score >= 70) return 'A solid neighborhood with good fundamentals and minor areas for improvement.';
-    if (score >= 50) return 'This area has both strengths and challenges typical of urban neighborhoods.';
-    return 'This area shows some concerns that potential residents should carefully consider.';
+function getDesc(s) {
+    if (s >= 85) return 'Excellent area with strong safety and livability indicators.';
+    if (s >= 70) return 'Good neighborhood with solid fundamentals.';
+    if (s >= 50) return 'Average area with typical urban challenges.';
+    return 'Area has concerns worth considering carefully.';
 }
 
 // ============================================
-// Map Functions
+// MAP
 // ============================================
 
-function addMarkerToMap(locationData, index) {
-    const { location, analysis } = locationData;
-    const color = getScoreColor(analysis.overallScore);
-    
-    const markerIcon = L.divIcon({
+function addMarker(locData, idx) {
+    const { location, analysis } = locData;
+    const color = getColor(analysis.overallScore);
+
+    const icon = L.divIcon({
         className: 'custom-marker',
         html: `<div style="
-            background: ${color};
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            border: 3px solid rgba(255,255,255,0.9);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 700;
-            font-size: 13px;
-            font-family: 'DM Sans', sans-serif;
+            background:${color};
+            width:32px;height:32px;
+            border-radius:50%;
+            border:3px solid rgba(255,255,255,0.9);
+            box-shadow:0 3px 10px rgba(0,0,0,0.4);
+            display:flex;align-items:center;justify-content:center;
+            color:#fff;font-weight:700;font-size:12px;
         ">${analysis.overallScore}</div>`,
-        iconSize: [36, 36],
-        iconAnchor: [18, 18]
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
     });
 
-    const marker = L.marker([location.lat, location.lon], { icon: markerIcon }).addTo(state.map);
-    
-    const popupContent = createPopupContent(locationData, index);
-    marker.bindPopup(popupContent, { maxWidth: 260, className: 'custom-popup' });
-    marker.on('click', () => selectLocation(index));
-    
+    const marker = L.marker([location.lat, location.lon], { icon }).addTo(state.map);
+
+    const popup = `
+        <div class="popup-inner">
+            <div class="popup-header">
+                <div class="popup-score" style="background:${color}22;color:${color};">${analysis.overallScore}</div>
+                <div class="popup-title">${shortAddr(location.display_name)}</div>
+            </div>
+            <div class="popup-stats">
+                <div class="popup-stat"><div class="popup-stat-value">${analysis.categories.safety.total}</div><div class="popup-stat-label">Crimes</div></div>
+                <div class="popup-stat"><div class="popup-stat-value">${analysis.categories.community.total}</div><div class="popup-stat-label">311</div></div>
+                <div class="popup-stat"><div class="popup-stat-value">${analysis.categories.parks.count}</div><div class="popup-stat-label">Parks</div></div>
+            </div>
+            <button class="popup-btn" onclick="openModal(${idx})">View Full Analysis</button>
+        </div>
+    `;
+
+    marker.bindPopup(popup, { maxWidth: 240 });
+    marker.on('click', () => selectLocation(idx));
     state.markers.push(marker);
     state.map.setView([location.lat, location.lon], 14);
 }
 
-function createPopupContent(locationData, index) {
-    const { location, analysis } = locationData;
-    const { categories } = analysis;
-    const color = getScoreColor(analysis.overallScore);
-    
-    return `
-        <div class="popup-inner">
-            <div class="popup-score">
-                <div class="popup-score-circle" style="background: ${color}22; color: ${color};">
-                    ${analysis.overallScore}
-                </div>
-                <div class="popup-title">${getShortAddress(location.display_name)}</div>
-            </div>
-            <div class="popup-stats">
-                <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.safety.total}</div>
-                    <div class="popup-stat-label">Crimes</div>
-                </div>
-                <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.community.total}</div>
-                    <div class="popup-stat-label">311 Calls</div>
-                </div>
-                <div class="popup-stat">
-                    <div class="popup-stat-value">${categories.parks.count}</div>
-                    <div class="popup-stat-label">Parks</div>
-                </div>
-            </div>
-            <button class="popup-btn" onclick="openDetailPanel(${index})">View Full Analysis</button>
-        </div>
-    `;
-}
-
 // ============================================
-// UI Rendering
+// UI
 // ============================================
 
-function renderLocationsList() {
+function renderList() {
     const container = document.getElementById('locationsList');
-    const emptyState = document.getElementById('emptyState');
-    
+    const empty = document.getElementById('emptyState');
+
     if (state.locations.length === 0) {
-        emptyState.style.display = 'block';
+        empty.style.display = 'block';
         container.innerHTML = '';
         return;
     }
-    
-    emptyState.style.display = 'none';
-    
-    container.innerHTML = state.locations.map((loc, index) => {
+
+    empty.style.display = 'none';
+    container.innerHTML = state.locations.map((loc, i) => {
         const { location, analysis } = loc;
         const { categories } = analysis;
-        const scoreClass = getScoreClass(analysis.overallScore);
-        const isActive = state.selectedIndex === index;
-        
+        const cls = getClass(analysis.overallScore);
+        const active = state.selectedIndex === i ? 'active' : '';
+
         return `
-            <div class="location-card ${isActive ? 'active' : ''}" onclick="selectLocation(${index})">
+            <div class="location-card ${active}" onclick="selectLocation(${i})">
                 <div class="location-header">
-                    <div class="location-name">${getShortAddress(location.display_name)}</div>
-                    <div class="location-score">
-                        <div class="score-circle score-${scoreClass}">${analysis.overallScore}</div>
-                        <span class="score-label">${analysis.scoreLabel}</span>
-                    </div>
+                    <div class="location-name">${shortAddr(location.display_name)}</div>
+                    <div class="score-circle score-${cls}">${analysis.overallScore}</div>
                 </div>
                 <div class="location-metrics">
-                    <div class="metric-mini">
-                        <div class="metric-mini-value">${categories.safety.score}</div>
-                        <div class="metric-mini-label">Safety</div>
-                    </div>
-                    <div class="metric-mini">
-                        <div class="metric-mini-value">${categories.community.score}</div>
-                        <div class="metric-mini-label">Community</div>
-                    </div>
-                    <div class="metric-mini">
-                        <div class="metric-mini-value">${categories.property.score}</div>
-                        <div class="metric-mini-label">Property</div>
-                    </div>
-                    <div class="metric-mini">
-                        <div class="metric-mini-value">${categories.parks.count}</div>
-                        <div class="metric-mini-label">Parks</div>
-                    </div>
+                    <div class="metric-mini"><div class="metric-mini-value">${categories.safety.score}</div><div class="metric-mini-label">Safety</div></div>
+                    <div class="metric-mini"><div class="metric-mini-value">${categories.community.score}</div><div class="metric-mini-label">Community</div></div>
+                    <div class="metric-mini"><div class="metric-mini-value">${categories.property.score}</div><div class="metric-mini-label">Property</div></div>
+                    <div class="metric-mini"><div class="metric-mini-value">${categories.parks.count}</div><div class="metric-mini-label">Parks</div></div>
                 </div>
             </div>
         `;
     }).join('');
 }
 
-function selectLocation(index) {
-    state.selectedIndex = index;
-    renderLocationsList();
-    
-    const loc = state.locations[index];
+function selectLocation(idx) {
+    state.selectedIndex = idx;
+    renderList();
+    const loc = state.locations[idx];
     state.map.setView([loc.location.lat, loc.location.lon], 15);
-    state.markers[index].openPopup();
+    state.markers[idx].openPopup();
 }
 
-function openDetailPanel(index) {
-    const loc = state.locations[index];
+// ============================================
+// MODAL
+// ============================================
+
+function openModal(idx) {
+    const loc = state.locations[idx];
     const { location, analysis, timeFilter } = loc;
     const { categories } = analysis;
-    const scoreClass = getScoreClass(analysis.overallScore);
-    const color = getScoreColor(analysis.overallScore);
-    
-    // Update header
-    document.getElementById('detailTitle').textContent = getShortAddress(location.display_name);
-    document.getElementById('detailAddress').textContent = location.display_name;
-    document.getElementById('detailScoreNumber').textContent = analysis.overallScore;
-    document.getElementById('detailScoreTitle').textContent = analysis.scoreLabel + ' Neighborhood';
-    document.getElementById('detailScoreDesc').textContent = analysis.scoreDescription;
-    
-    const scoreCircle = document.getElementById('detailScoreCircle');
-    scoreCircle.className = `detail-score-circle score-${scoreClass}`;
-    scoreCircle.style.background = `${color}22`;
-    scoreCircle.style.color = color;
-    
-    // Update content
-    document.getElementById('detailContent').innerHTML = `
+    const color = getColor(analysis.overallScore);
+    const cls = getClass(analysis.overallScore);
+
+    document.getElementById('modalTitle').textContent = shortAddr(location.display_name);
+    document.getElementById('modalAddress').textContent = location.display_name;
+    document.getElementById('modalScoreNumber').textContent = analysis.overallScore;
+    document.getElementById('modalScoreTitle').textContent = analysis.scoreLabel + ' Neighborhood';
+    document.getElementById('modalScoreDesc').textContent = analysis.scoreDesc;
+
+    const circle = document.getElementById('modalScoreCircle');
+    circle.className = `modal-score-circle score-${cls}`;
+    circle.style.background = `${color}22`;
+    circle.style.color = color;
+
+    document.getElementById('modalBody').innerHTML = `
         <div class="metrics-grid">
             <div class="metric-card">
-                <div class="metric-icon safety">🚨</div>
+                <div class="metric-icon">🚨</div>
                 <div class="metric-value">${categories.safety.score}</div>
                 <div class="metric-label">Safety Score</div>
                 <div class="metric-detail">${categories.safety.total} incidents (${categories.safety.violent} violent)</div>
             </div>
             <div class="metric-card">
-                <div class="metric-icon community">📞</div>
+                <div class="metric-icon">📞</div>
                 <div class="metric-value">${categories.community.score}</div>
                 <div class="metric-label">Community Score</div>
                 <div class="metric-detail">${categories.community.total} service requests</div>
             </div>
             <div class="metric-card">
-                <div class="metric-icon property">🏠</div>
+                <div class="metric-icon">🏠</div>
                 <div class="metric-value">${categories.property.score}</div>
                 <div class="metric-label">Property Score</div>
                 <div class="metric-detail">${categories.property.open} open violations</div>
             </div>
             <div class="metric-card">
-                <div class="metric-icon parks">🌳</div>
+                <div class="metric-icon">🌳</div>
                 <div class="metric-value">${categories.parks.count}</div>
                 <div class="metric-label">Parks Nearby</div>
-                <div class="metric-detail">${categories.parks.count > 0 ? 'Recreation access' : 'Limited green space'}</div>
+                <div class="metric-detail">${categories.parks.count > 0 ? 'Green space access' : 'Limited parks'}</div>
             </div>
         </div>
-        
+
         <div class="breakdown-section">
-            <div class="breakdown-title">Score Breakdown</div>
-            ${renderBreakdownBar('Safety (35%)', categories.safety.score, '#ef4444')}
-            ${renderBreakdownBar('Community (25%)', categories.community.score, '#a855f7')}
-            ${renderBreakdownBar('Property (20%)', categories.property.score, '#f59e0b')}
-            ${renderBreakdownBar('Green Space (20%)', categories.parks.score, '#22c55e')}
+            <div class="breakdown-title">Score Weights</div>
+            ${bar('Safety (35%)', categories.safety.score, '#ef4444')}
+            ${bar('Community (25%)', categories.community.score, '#a855f7')}
+            ${bar('Property (20%)', categories.property.score, '#f59e0b')}
+            ${bar('Green Space (20%)', categories.parks.score, '#22c55e')}
         </div>
-        
+
         <div class="breakdown-section">
-            <div class="breakdown-title">Community Issues (311)</div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">🔊 Noise Complaints</span>
-                <span class="breakdown-value">${categories.community.noise}</span>
-            </div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">🗑️ Dumping/Litter</span>
-                <span class="breakdown-value">${categories.community.dumping}</span>
-            </div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">🔧 Street Maintenance</span>
-                <span class="breakdown-value">${categories.community.maintenance}</span>
-            </div>
+            <div class="breakdown-title">311 Breakdown</div>
+            <div class="breakdown-item"><span>🔊 Noise</span><span>${categories.community.noise}</span></div>
+            <div class="breakdown-item"><span>🗑️ Dumping</span><span>${categories.community.dumping}</span></div>
+            <div class="breakdown-item"><span>🔧 Maintenance</span><span>${categories.community.maintenance}</span></div>
         </div>
-        
+
         <div class="breakdown-section">
             <div class="breakdown-title">Crime Breakdown</div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">⚠️ Violent Crimes</span>
-                <span class="breakdown-value">${categories.safety.violent}</span>
-            </div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">🏠 Property Crimes</span>
-                <span class="breakdown-value">${categories.safety.property}</span>
-            </div>
-            <div class="breakdown-item">
-                <span class="breakdown-name">📋 Other Incidents</span>
-                <span class="breakdown-value">${categories.safety.other}</span>
-            </div>
+            <div class="breakdown-item"><span>⚠️ Violent</span><span>${categories.safety.violent}</span></div>
+            <div class="breakdown-item"><span>🏠 Property</span><span>${categories.safety.property}</span></div>
+            <div class="breakdown-item"><span>📋 Other</span><span>${categories.safety.other}</span></div>
         </div>
-        
-        ${categories.safety.recentIncidents.length > 0 ? `
+
+        ${categories.safety.recent.length > 0 ? `
         <div class="breakdown-section">
             <div class="breakdown-title">Recent Incidents</div>
             <div class="incidents-list">
-                ${categories.safety.recentIncidents.slice(0, 5).map(inc => `
+                ${categories.safety.recent.map(r => `
                     <div class="incident-item">
-                        <div class="incident-type">${inc.type}</div>
-                        <div class="incident-date">${inc.date}</div>
+                        <div class="incident-type">${r.type}</div>
+                        <div class="incident-date">${r.date}</div>
                     </div>
                 `).join('')}
             </div>
         </div>
         ` : ''}
-        
+
         <div class="breakdown-section">
             <div class="breakdown-title">Data Info</div>
-            <div style="font-size: 11px; color: var(--text-muted); line-height: 1.7;">
-                📅 Time range: ${timeFilter || 12} months<br>
-                📍 Radius: ~0.5 miles<br>
-                🔄 Data from Philadelphia Open Data<br>
+            <div style="font-size:10px;color:var(--text-muted);">
+                Time range: ${timeFilter} months • Radius: ~0.5 mi<br>
+                Source: Philadelphia Open Data
             </div>
         </div>
     `;
-    
-    // Open panel
-    document.getElementById('detailPanel').classList.add('open');
-    document.getElementById('detailOverlay').classList.add('open');
+
+    document.getElementById('modalOverlay').classList.add('open');
 }
 
-function renderBreakdownBar(label, score, color) {
+function bar(label, score, color) {
     return `
         <div class="breakdown-item">
-            <span class="breakdown-name">${label}</span>
-            <div class="breakdown-bar">
-                <div class="breakdown-bar-fill" style="width: ${score}%; background: ${color};"></div>
-            </div>
-            <span class="breakdown-value">${score}</span>
+            <span>${label}</span>
+            <div class="breakdown-bar"><div class="breakdown-bar-fill" style="width:${score}%;background:${color};"></div></div>
+            <span>${score}</span>
         </div>
     `;
 }
 
-function closeDetailPanel() {
-    document.getElementById('detailPanel').classList.remove('open');
-    document.getElementById('detailOverlay').classList.remove('open');
+function closeModal() {
+    document.getElementById('modalOverlay').classList.remove('open');
 }
 
 // ============================================
-// Utility Functions
+// UTILS
 // ============================================
 
-function getShortAddress(fullAddress) {
-    if (!fullAddress) return 'Unknown Location';
-    const parts = fullAddress.split(',');
-    return parts.slice(0, 2).join(',').trim();
+function shortAddr(full) {
+    if (!full) return 'Unknown';
+    return full.split(',').slice(0, 2).join(',').trim();
 }
 
-function showLoading(show, text = 'Loading...') {
-    const overlay = document.getElementById('loadingOverlay');
-    document.getElementById('loadingText').textContent = text;
-    if (show) {
-        overlay.classList.add('active');
-    } else {
-        overlay.classList.remove('active');
-    }
+function showLoading(show, text) {
+    const el = document.getElementById('loadingOverlay');
+    document.getElementById('loadingText').textContent = text || 'Loading...';
+    if (show) el.classList.add('active');
+    else el.classList.remove('active');
 }
 
-function showToast(message, type = 'success') {
+function showToast(msg, type) {
     const toast = document.getElementById('toast');
     document.getElementById('toastIcon').textContent = type === 'success' ? '✓' : '✕';
-    document.getElementById('toastMessage').textContent = message;
+    document.getElementById('toastMessage').textContent = msg;
     toast.className = `toast ${type}`;
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-// Global functions
+// Globals
 window.searchArea = searchArea;
 window.selectLocation = selectLocation;
-window.openDetailPanel = openDetailPanel;
-window.closeDetailPanel = closeDetailPanel;
-window.setTimeFilter = setTimeFilter;
-
-console.log('🏠 Philly Nest ready!');
+window.openModal = openModal;
+window.closeModal = closeModal;
